@@ -1,0 +1,6 @@
+- How to run client
+  - Run the main() in SkierClient class.
+- Where to change the Servlet URL
+  - Change URL in SERVER_URL variable of HttpPostThread class.
+- Where to find servlet war file
+  - /Skier/out/artifacts/Server_war/Server_war.war
