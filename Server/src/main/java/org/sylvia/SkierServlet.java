@@ -22,6 +22,8 @@ import com.rabbitmq.client.Channel;
 import com.rabbitmq.client.Connection;
 import com.rabbitmq.client.ConnectionFactory;
 
+import io.github.resilience4j.ratelimiter.RateLimiter;
+import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import io.swagger.client.model.LiftRide;
 import io.swagger.client.model.ResponseMsg;
 
@@ -90,37 +92,20 @@ public class SkierServlet extends HttpServlet {
             return;
         }
 
-        String[] pathParts = pathInfo.split("/");
-        int resortID = Integer.parseInt(pathParts[1]);
-        String seasonID = pathParts[3];
-        int dayID = Integer.parseInt(pathParts[5]);
-        int skierID = Integer.parseInt(pathParts[7]);
-
-        // Format the payload to be sent to the remote queue
-        JsonObject msg = new JsonObject();
-        msg.add("skierID", new JsonPrimitive(skierID));
-        msg.add("resortID", new JsonPrimitive(resortID));
-        msg.add("seasonID", new JsonPrimitive(seasonID));
-        msg.add("dayID", new JsonPrimitive(dayID));
-        msg.add("time", new JsonPrimitive(liftRide.getTime()));
-        msg.add("liftID", new JsonPrimitive(liftRide.getLiftID()));
-
         // Send the formatted message to RabbitMQ
         try {
-            sendToQueue(msg.toString());
-            // logger.info("Message sent to RabbitMQ successfully.");
-        } catch (InterruptedException | IOException e) {
-            logger.severe("Failed to send message to queue: " + e.getMessage());
-            resp.setStatus(HttpServletResponse.SC_INTERNAL_SERVER_ERROR); // 500
-            writeResponse(resp, "Failed to send message to queue");
-            return;
+            RateLimiter.decorateRunnable(ResilienceConfig.getRateLimiter(), () -> {
+                try {
+                    handleRequest(req, resp, liftRide);
+                } catch (Exception e) {
+                    throw new RuntimeException(e);
+                }
+            }).run();
+        }  catch (RequestNotPermitted e) {
+            logger.warning("Rate limit exceeded. Rejecting request.");
+            resp.sendError(429, "Too many requests"); // no 429 in static variable
+            writeResponse(resp, "Rate limit exceeded. Please try again later.");
         }
-
-        // Return success response
-        resp.setStatus(HttpServletResponse.SC_CREATED); // 201
-        writeResponse(resp, String.format("Lift ride stored for skierID %d at resort %d on day %d in %s",
-                skierID, resortID, dayID, seasonID));
-        logger.info("POST request processed successfully for skierID: " + skierID);
     }
 
     private Boolean isUrlPathValid(String urlPath, HttpServletResponse resp) throws IOException {
@@ -199,13 +184,46 @@ public class SkierServlet extends HttpServlet {
         resp.getWriter().write(gson.toJson(new ResponseMsg().message(message)));
     }
 
-    private void sendToQueue(String msg) throws InterruptedException, IOException {
+    private void handleRequest(HttpServletRequest req, HttpServletResponse resp, LiftRide liftRide)
+            throws IOException, InterruptedException {
+        String pathInfo = req.getPathInfo();
+        String[] pathParts = pathInfo.split("/");
+        int resortID = Integer.parseInt(pathParts[1]);
+        String seasonID = pathParts[3];
+        int dayID = Integer.parseInt(pathParts[5]);
+        int skierID = Integer.parseInt(pathParts[7]);
+
+        // Format the payload to be sent to the remote queue
+        JsonObject msg = new JsonObject();
+        msg.add("skierID", new JsonPrimitive(skierID));
+        msg.add("resortID", new JsonPrimitive(resortID));
+        msg.add("seasonID", new JsonPrimitive(seasonID));
+        msg.add("dayID", new JsonPrimitive(dayID));
+        msg.add("time", new JsonPrimitive(liftRide.getTime()));
+        msg.add("liftID", new JsonPrimitive(liftRide.getLiftID()));
+
+        sendToQueue(msg.toString());
+
+        // Return success response
+        resp.setStatus(HttpServletResponse.SC_CREATED); // 201
+        writeResponse(resp, String.format("Lift ride stored for skierID %d at resort %d on day %d in %s",
+                skierID, resortID, dayID, seasonID));
+        logger.info("POST request processed successfully for skierID: " + skierID);
+    }
+
+    private void sendToQueue(String msg) {
         Channel channel = null;
         try {
             channel = channelPool.take();
             channel.queueDeclare(RABBITMQ_NAME, false, false, false, null);
             channel.basicPublish("", RABBITMQ_NAME, null, msg.getBytes(StandardCharsets.UTF_8));
             logger.info("Message published to queue: " + RABBITMQ_NAME);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt(); // Restore interrupt status
+            logger.severe("Thread interrupted while sending message to queue: " + e.getMessage());
+        } catch (IOException e) {
+            logger.severe("IO exception while sending message to queue: " + e.getMessage());
+            throw new RuntimeException("Failed to send message to RabbitMQ", e); // Wrap in a runtime exception
         } finally {
             // Return the channel to the pool
             if (channel != null) {
@@ -213,7 +231,5 @@ public class SkierServlet extends HttpServlet {
                 // logger.info("Channel returned to the pool.");
             }
         }
-
     }
-
 }

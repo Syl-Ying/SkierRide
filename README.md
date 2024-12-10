@@ -2,13 +2,18 @@
   - Run the main() in SkierClient class.
 - Where to change the Servlet URL
   - Change URL in SERVER_URL variable of HttpPostThread class.
-- Where to find servlet war file
-  - /Skier/out/artifacts/Server_war/Server_war.war
+- Where to find servlet war file to deploy on EC2
+  - SkierRide/out/artifacts/Server_war/Server_war.war
+- Future Improvements
+  - Format API response using responseMsg provided by swagger
+  - Fix load balancer
+  - Add destroy() in servlet to close channel poll and connection
+  - Queue sharding + increase rate limiting qps -> increase client rqs
+- Tasks assigned
 
-| Task                      | Deadline  | Assignee(s)          | Notes                                                                          |
-|---------------------------|-----------|-----------------------|--------------------------------------------------------------------------------|
-| Client Throttle           | 12/3      | Sylvia               | Reduce and maintain stable production rate                                     |
-| GET APIs + Consumer DDB    | 12/4      | Sylvia (2), Zhuofan (1) | 3 APIs + Redis <br> Determine whether to use dedicated consumers for diff APIs |
-| JMeter: Write 3 Test Cases| 12/5      | Zhuofan (2), Sylvia (1) | Zhuofan to research how to proceed                                             |
-| Pre-slides                | 12/10 (Tue) | Zhuofan (create), Sylvia (revise) | Use draw.io for architecture diagrams                                          |
-| Pre-Mock                  | 12/11 (Wed) | Sylvia, Zhuofan      |                                                                                |
+| Task                       | Deadline  | Assignee(s)          | Notes                                                                          |
+|----------------------------|-----------|-----------------------|--------------------------------------------------------------------------------|
+| Client Throttle (Done)     | 12/3      | Sylvia               | Reduce and maintain stable production rate                                     |
+| Servlet GET APIs + DDB     | 12/4      | Sylvia  | 3 APIs + Redis <br>|
+| JMeter: Write 3 Test Cases | 12/5      | Zhuofan  | Zhuofan to research how to proceed                                             |
+| Pre-slides                 | 12/10 (Tue) | Zhuofan (create), Sylvia (revise) | Use draw.io for architecture diagrams                                          | |
