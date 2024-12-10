@@ -13,8 +13,8 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class HttpPostThread implements Runnable {
 
     protected static final Integer MAX_RETRIES = 5;
-    // protected static final String SERVER_URL = "http://34.210.108.225:8080/Server_war/"; // servlet EC2
-    protected static final String SERVER_URL = "http://ALB-290695466.us-west-2.elb.amazonaws.com/Server_war/"; // servlet ALB
+    protected static final String SERVER_URL = "http://44.237.21.217:8080/Server_war/"; // servlet EC2
+    // protected static final String SERVER_URL = "http://ALB-290695466.us-west-2.elb.amazonaws.com/Server_war/"; // servlet ALB
     // protected static final String SERVER_URL = "http://localhost:8080/Server/";
 
     private BlockingDeque<LiftRideEvent> eventQueue;
