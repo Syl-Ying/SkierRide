@@ -7,9 +7,10 @@ import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.*;
 import software.amazon.awssdk.services.dynamodb.waiters.DynamoDbWaiter;
 
-import java.util.Collections;
-import java.util.HashMap;
-import java.util.Map;
+import java.util.*;
+import java.util.concurrent.Executors;
+import java.util.concurrent.ScheduledExecutorService;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 
 public class DynamoDB {
@@ -17,12 +18,25 @@ public class DynamoDB {
     private final Logger logger = Logger.getLogger(DynamoDB.class.getName());
     private final DynamoDbClient ddb;
 
+    // Buffer for batch processing
+    private final List<WriteRequest> buffer = new ArrayList<>();
+    private final Object bufferLock = new Object(); // Ensure thread safety
+
+    // Batch write executor
+    private final ScheduledExecutorService batchExecutor = Executors.newScheduledThreadPool(1);
+
     public DynamoDB() {
         this.ddb = DynamoDbClient.builder()
                 .region(DynamoDbConfig.REGION)
                 .build();
+
+        // Start the batch executor to periodically flush the buffer
+        batchExecutor.scheduleAtFixedRate(this::flushBuffer, 0, 1, TimeUnit.SECONDS);
     }
 
+    /**
+     * Add a message to the batch buffer
+     */
     public void injectDynamoItem(LiftRideMessage liftRideMessage) {
         // Extract values from the message
         String skierID = String.valueOf(liftRideMessage.getSkierID());
@@ -34,63 +48,92 @@ public class DynamoDB {
         String resortID = String.valueOf(liftRideMessage.getResortID());
 
         // Composite keys for the base table and GSI
-        String skierTableSortKey = seasonID + "#" + dayID;
+        String skierTableSortKey = seasonID + "#" + dayID + "#" + time;
 
-        updateSkierTable(skierID, skierTableSortKey, liftID, time, vertical, resortID);
+        synchronized (bufferLock) {
+            buffer.add(createItem(skierID, skierTableSortKey, seasonID, dayID, liftID, time, vertical, resortID));
 
-        // updateResortSeasons(resortID, seasonID);
+            if (buffer.size() >= 25) {
+                flushBuffer();
+            }
+        }
     }
 
-    private void updateSkierTable(String skierID, String sortKey, int liftID, int time, int vertical, String resortID) {
-        // Update expression
-        String updateExpression = "SET #liftList = list_append(if_not_exists(#liftList, :emptyList), :newLift), " +
-                "#vertical = if_not_exists(#vertical, :zero) + :vertical, " +
-                "#resort = if_not_exists(#resort, :resortID), " +
-                "#gsiSk = :gsiSk";
-
+    /**
+     * Create a WriteRequest from a message
+     * API: POST /skiers/{resortID}/seasons/{seasonID}/days/{dayID}/skiers/{skierID}
+     */
+    private WriteRequest createItem(String skierID, String sortKey, String seasonID, String dayID,
+                                  int liftID, int time, int vertical, String resortID) {
         // Attribute values
-        Map<String, AttributeValue> expressionAttributeValues = new HashMap<>();
-        expressionAttributeValues.put(":emptyList", AttributeValue.builder().l(Collections.emptyList()).build());
-        expressionAttributeValues.put(":newLift", AttributeValue.builder()
-                .l(AttributeValue.builder().m(Map.of(
-                        "liftID", AttributeValue.builder().n(String.valueOf(liftID)).build(),
-                        "time", AttributeValue.builder().n(String.valueOf(time)).build()
-                )).build())
-                .build());
-        expressionAttributeValues.put(":zero", AttributeValue.builder().n("0").build());
-        expressionAttributeValues.put(":vertical", AttributeValue.builder().n(String.valueOf(vertical)).build());
-        expressionAttributeValues.put(":resortID", AttributeValue.builder().s(resortID).build());
-        expressionAttributeValues.put(":gsiSk", AttributeValue.builder().s(sortKey + "#" + skierID).build());
+        Map<String, AttributeValue> item = new HashMap<>();
+        item.put("skierID", AttributeValue.builder().s(skierID).build()); // Partition Key
+        item.put("seasonID#dayID#time", AttributeValue.builder().s(sortKey).build()); // Sort Key
+        item.put("seasonID", AttributeValue.builder().s(seasonID).build());
+        item.put("dayID", AttributeValue.builder().s(dayID).build());
+        item.put("time", AttributeValue.builder().n(String.valueOf(time)).build());
+        item.put("LiftID", AttributeValue.builder().n(String.valueOf(liftID)).build());
+        item.put("vertical", AttributeValue.builder().n(String.valueOf(vertical)).build());
+        item.put("resortID", AttributeValue.builder().s(resortID).build());
+        item.put("seasonID#dayID#skierID", AttributeValue.builder().s(sortKey + "#" + skierID).build()); // GSI Sort Key
 
-        // Attribute names
-        Map<String, String> expressionAttributeNames = new HashMap<>();
-        expressionAttributeNames.put("#liftList", "liftList");
-        expressionAttributeNames.put("#vertical", "totalVertical");
-        expressionAttributeNames.put("#resort", "resortID");
-        expressionAttributeNames.put("#gsiSk", "seasonID#dayID#skierID");
+        return WriteRequest.builder().putRequest(PutRequest.builder().item(item).build()).build();
+    }
 
-        // UpdateItemRequest
-        UpdateItemRequest request = UpdateItemRequest.builder()
-                .tableName(DynamoDbConfig.SKIER_TABLE_NAME)
-                .key(Map.of(
-                        "skierID", AttributeValue.builder().s(skierID).build(),
-                        "seasonID#dayID", AttributeValue.builder().s(sortKey).build()
-                ))
-                .updateExpression(updateExpression)
-                .expressionAttributeValues(expressionAttributeValues)
-                .expressionAttributeNames(expressionAttributeNames)
-                .build();
+    /**
+     * Flush the buffer and send batch write request to DynamoDB
+     */
+    private void flushBuffer() {
+        List<WriteRequest> requestsToFlush;
 
-        // Execute the update
-        try {
-            ddb.updateItem(request);
-        } catch (Exception e) {
-            logger.warning("Error during updateItem for skierTable: " + e.getMessage());
+        synchronized (bufferLock) {
+            if (buffer.isEmpty()) {
+                return; // Nothing to flush
+            }
+
+            // Copy and clear the buffer
+            requestsToFlush = new ArrayList<>(buffer);
+            buffer.clear();
         }
 
+        // Split into smaller batches if necessary
+        for (int i = 0; i < requestsToFlush.size(); i += 25) {
+            List<WriteRequest> batch = requestsToFlush.subList(i, Math.min(i + 25, requestsToFlush.size()));
+
+            try {
+                BatchWriteItemRequest batchRequest = BatchWriteItemRequest.builder()
+                        .requestItems(Map.of(DynamoDbConfig.SKIER_TABLE_NAME, batch))
+                        .build();
+
+                BatchWriteItemResponse response = ddb.batchWriteItem(batchRequest);
+
+                // Retry unprocessed items
+                if (!response.unprocessedItems().isEmpty()) {
+                    handleUnprocessedItems(response.unprocessedItems().get(DynamoDbConfig.SKIER_TABLE_NAME));
+                }
+            } catch (Exception e) {
+                logger.warning("Error during batchWrite: " + e.getMessage());
+            }
+        }
     }
 
-    private void updateResortSeasons(String resortID, String seasonID) {
+    /**
+     * Retry unprocessed items
+     */
+    private void handleUnprocessedItems(List<WriteRequest> unprocessedItems) {
+        logger.warning("Retrying unprocessed items...");
+        try {
+            BatchWriteItemRequest retryRequest = BatchWriteItemRequest.builder()
+                    .requestItems(Map.of(DynamoDbConfig.SKIER_TABLE_NAME, unprocessedItems))
+                    .build();
+            ddb.batchWriteItem(retryRequest);
+        } catch (Exception e) {
+            logger.severe("Error retrying unprocessed items: " + e.getMessage());
+        }
+    }
+
+    // POST /resorts/{resortID}/seasons
+    private void createResortSeasons(String resortID, String seasonID) {
         String updateExpression = "ADD #seasons :newSeason";
 
         // Attribute values
@@ -172,13 +215,13 @@ public class DynamoDB {
                     .tableName(tableName)
                     .keySchema(
                             KeySchemaElement.builder().attributeName("skierID").keyType(KeyType.HASH).build(),
-                            KeySchemaElement.builder().attributeName("seasonID#dayID").keyType(KeyType.RANGE).build()
+                            KeySchemaElement.builder().attributeName("seasonID#dayID#time").keyType(KeyType.RANGE).build()
                     )
                     .attributeDefinitions(
                             AttributeDefinition.builder().attributeName("skierID").attributeType(ScalarAttributeType.S).build(),
                             AttributeDefinition.builder().attributeName("resortID").attributeType(ScalarAttributeType.S).build(),
-                            AttributeDefinition.builder().attributeName("seasonID#dayID").attributeType(ScalarAttributeType.S).build(),
-                            AttributeDefinition.builder().attributeName("seasonID#dayID#skierID").attributeType(ScalarAttributeType.S).build()
+                            AttributeDefinition.builder().attributeName("seasonID#dayID#time").attributeType(ScalarAttributeType.S).build(),
+                            AttributeDefinition.builder().attributeName("seasonID#dayID#skierID").attributeType(ScalarAttributeType.S).build() // GSI sorting key
                     )
                     .globalSecondaryIndexes(
                             GlobalSecondaryIndex.builder()
@@ -207,6 +250,20 @@ public class DynamoDB {
         } catch (Exception e) {
             logger.severe("Error creating table: " + e.getMessage());
             e.printStackTrace();
+        }
+    }
+
+    /**
+     * Shut down the batch executor
+     */
+    public void shutdown() {
+        batchExecutor.shutdown();
+        try {
+            if (!batchExecutor.awaitTermination(5, TimeUnit.SECONDS)) {
+                batchExecutor.shutdownNow();
+            }
+        } catch (InterruptedException e) {
+            batchExecutor.shutdownNow();
         }
     }
 }
