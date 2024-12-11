@@ -75,7 +75,7 @@ public class DynamoDB {
         item.put("LiftID", AttributeValue.builder().n(String.valueOf(liftID)).build());
         item.put("vertical", AttributeValue.builder().n(String.valueOf(vertical)).build());
         item.put("resortID", AttributeValue.builder().s(resortID).build());
-        item.put("seasonID#dayID#skierID", AttributeValue.builder().s(sortKey + "#" + skierID).build()); // GSI Sort Key
+        item.put("seasonID#dayID#skierID", AttributeValue.builder().s(seasonID + "#" + dayID + "#" + skierID).build()); // GSI Sort Key
 
         return WriteRequest.builder().putRequest(PutRequest.builder().item(item).build()).build();
     }
@@ -129,38 +129,6 @@ public class DynamoDB {
             ddb.batchWriteItem(retryRequest);
         } catch (Exception e) {
             logger.severe("Error retrying unprocessed items: " + e.getMessage());
-        }
-    }
-
-    // POST /resorts/{resortID}/seasons
-    private void createResortSeasons(String resortID, String seasonID) {
-        String updateExpression = "ADD #seasons :newSeason";
-
-        // Attribute values
-        Map<String, AttributeValue> expressionAttributeValues = new HashMap<>();
-        expressionAttributeValues.put(":newSeason", AttributeValue.builder()
-                .ss(seasonID)
-                .build());
-
-        // Attribute names
-        Map<String, String> expressionAttributeNames = new HashMap<>();
-        expressionAttributeNames.put("#seasons", "seasonSet");
-
-        // UpdateItemRequest
-        UpdateItemRequest request = UpdateItemRequest.builder()
-                .tableName(DynamoDbConfig.RESORT_TABLE_NAME)
-                .key(Map.of(
-                        "resortID", AttributeValue.builder().s(resortID).build()
-                ))
-                .updateExpression(updateExpression)
-                .expressionAttributeValues(expressionAttributeValues)
-                .expressionAttributeNames(expressionAttributeNames)
-                .build();
-
-        try {
-            ddb.updateItem(request);
-        } catch (Exception e) {
-            logger.warning("Error during updateItem for resortTable: " + e.getMessage());
         }
     }
 

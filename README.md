@@ -5,7 +5,7 @@
 - Where to find servlet war file to deploy on EC2
   - SkierRide/out/artifacts/Server_war/Server_war.war
 - Future Improvements
-  - Format API response using responseMsg provided by swagger
+  - Catch exception and writeResponse in doPost() of servlet, explicitly throw exceptions in helper methods
   - Fix load balancer
   - Add destroy() in servlet to close channel poll and connection
   - Queue sharding + increase rate limiting qps -> increase client rqs

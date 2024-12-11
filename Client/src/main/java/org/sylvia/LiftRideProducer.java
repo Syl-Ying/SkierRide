@@ -1,6 +1,7 @@
 package org.sylvia;
 
 import io.swagger.client.model.LiftRide;
+import org.sylvia.model.LiftRideEvent;
 
 import java.util.Random;
 import java.util.concurrent.BlockingDeque;
@@ -23,7 +24,8 @@ public class LiftRideProducer implements Runnable {
             // Generate a random lift ride event
             LiftRideEvent liftRide = new LiftRideEvent(
                     random.nextInt(100000) + 1, // skierID [1, 100000]
-                    random.nextInt(10) + 1, // resortID [1, 10]
+                    1, // constant resortID
+                    //random.nextInt(10) + 1, // resortID [1, 10]
                     "2024", // seasonID 2024
                     "1", // dayID 1
                     new LiftRide().liftID(random.nextInt(40) + 1).time(random.nextInt(360) + 1) // liftID [1, 40], time [1, 360]
