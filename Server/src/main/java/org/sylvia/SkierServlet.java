@@ -27,13 +27,13 @@ import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import io.swagger.client.model.LiftRide;
 import io.swagger.client.model.ResponseMsg;
 
-import static org.sylvia.Constant.*;
+import static org.sylvia.RabbitMQConfig.*;
 
 
 @WebServlet(name = "SkierServlet", value = "/skiers/*")
 public class SkierServlet extends HttpServlet {
 
-    private Gson gson = new Gson();
+    private final Gson gson = new Gson();
     private static final Integer NUM_CHANNELS = 30;
     private static final Logger logger = Logger.getLogger(SkierServlet.class.getName());
     private BlockingQueue<Channel> channelPool;
@@ -58,22 +58,6 @@ public class SkierServlet extends HttpServlet {
         } catch (ServletException | IOException | TimeoutException e) {
             logger.severe("Failed to initialize RabbitMQ connection or channels: " + e.getMessage());
             throw new RuntimeException("Failed to initialize RabbitMQ connection or channels", e);
-        }
-    }
-
-    @Override
-    protected void doGet(HttpServletRequest req, HttpServletResponse resp)
-            throws ServletException, IOException {
-        resp.setContentType("text/plain");
-        String pathInfo = req.getPathInfo();
-
-        // validate url path and return response code and maybe some value if input is valid
-        if (!isUrlPathValid(pathInfo, resp)) {
-            return;
-        } else {
-            resp.setStatus(HttpServletResponse.SC_OK); // 200
-            // TODO: process url params in `urlParts`
-            resp.getWriter().write("200 It Works!");
         }
     }
 

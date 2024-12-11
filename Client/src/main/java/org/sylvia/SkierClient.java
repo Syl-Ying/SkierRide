@@ -1,5 +1,8 @@
 package org.sylvia;
 
+import org.sylvia.model.LiftRideEvent;
+import org.sylvia.model.Record;
+
 import java.io.IOException;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicInteger;

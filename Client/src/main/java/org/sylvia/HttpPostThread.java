@@ -7,6 +7,8 @@ import io.swagger.client.api.SkiersApi;
 import io.swagger.client.model.LiftRide;
 import org.apache.commons.logging.Log;
 import org.apache.commons.logging.LogFactory;
+import org.sylvia.model.LiftRideEvent;
+import org.sylvia.model.Record;
 
 import java.util.concurrent.BlockingDeque;
 import java.util.concurrent.CountDownLatch;
@@ -15,7 +17,7 @@ import java.util.concurrent.atomic.AtomicInteger;
 public class HttpPostThread implements Runnable {
 
     protected static final Integer MAX_RETRIES = 5;
-    protected static final String SERVER_URL = "http://44.237.21.217:8080/Servlet_war/"; // servlet EC2
+    protected static final String SERVER_URL = "http://44.237.21.217:8080/Servlet_war/"; // POST servlet EC2 EIP
     private static final Log log = LogFactory.getLog(HttpPostThread.class);
     // protected static final String SERVER_URL = "http://ALB-290695466.us-west-2.elb.amazonaws.com/Server_war/";
     // protected static final String SERVER_URL = "http://localhost:8080/Server/";
