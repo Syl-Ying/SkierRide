@@ -1,6 +1,7 @@
 package org.sylvia;
 
 import com.google.gson.Gson;
+import io.swagger.client.model.ResortSkiers;
 import io.swagger.client.model.ResponseMsg;
 
 import javax.servlet.ServletException;
@@ -10,8 +11,6 @@ import javax.servlet.http.HttpServletRequest;
 import javax.servlet.http.HttpServletResponse;
 import java.io.IOException;
 import java.time.Year;
-import java.util.HashMap;
-import java.util.Map;
 import java.util.logging.Logger;
 
 @WebServlet(name = "ResortServlet", value = "/resorts/*")
@@ -48,12 +47,18 @@ public class ResortServlet extends HttpServlet {
             int seasonID = Integer.parseInt(pathParts[3]);
             int dayID = Integer.parseInt(pathParts[5]);
 
-            int uniqueSkiers = getUniqueSkiers(resortID, seasonID, dayID); // 404 data not found
+            int uniqueSkiers = queryDao.getUniqueSkierNumbers(resortID, seasonID, dayID); // 404 data not found
             resp.setStatus(HttpServletResponse.SC_OK);
-            resp.getWriter().write(gson.toJson(uniqueSkiers));
+            resp.getWriter().write(gson.toJson(new ResortSkiers().time(String.valueOf(resortID)).numSkiers(uniqueSkiers)));
         } else {
             writeErrorResponse(resp, HttpServletResponse.SC_BAD_REQUEST, "Invalid path format");
         }
+    }
+
+    @Override
+    public void destroy() {
+        queryDao.shutdown();
+        logger.info("ResortServlet destroyed and QueryDao resources released");
     }
 
     private Boolean validateUrlPath(String[] pathParts) {
@@ -71,11 +76,6 @@ public class ResortServlet extends HttpServlet {
         }
 
         return true;
-    }
-
-    private int getUniqueSkiers(int resortID, int seasonID, int dayID) {
-        int uniqueSkier = queryDao.getUniqueSkierNumbers(resortID, seasonID, dayID);
-        return uniqueSkier;
     }
 
     private void writeErrorResponse(HttpServletResponse resp, int statusCode, String message) throws IOException {

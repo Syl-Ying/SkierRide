@@ -4,7 +4,10 @@ import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.logging.Logger;
+import java.util.stream.Collectors;
 
+import io.swagger.client.model.SkierVertical;
+import io.swagger.client.model.SkierVerticalResorts;
 import org.sylvia.config.DynamoDbConfig;
 import software.amazon.awssdk.services.dynamodb.DynamoDbClient;
 import software.amazon.awssdk.services.dynamodb.model.AttributeValue;
@@ -30,38 +33,16 @@ public class QueryDao {
         return instance;
     }
 
- /*   public void injectDynamoItem() {
-        // Extract values from the message
-        String skierID = String.valueOf(liftRideMessage.getSkierID());
-        String seasonID = liftRideMessage.getSeasonID();
-        String dayID = liftRideMessage.getDayID();
-        int liftID = liftRideMessage.getLiftID();
-        int time = liftRideMessage.getTime();
-        int vertical = liftID * 10; // Calculate vertical gain
-        String resortID = String.valueOf(liftRideMessage.getResortID());
-
-        // Composite keys for the base table and GSI
-        String skierTableSortKey = seasonID + "#" + dayID + "#" + time;
-
-        synchronized (bufferLock) {
-            buffer.add(createItem(skierID, skierTableSortKey, seasonID, dayID, liftID, time, vertical, resortID));
-
-            if (buffer.size() >= 25) {
-                flushBuffer();
-            }
-        }
-    }
-*/
-
     /**
-     * Get result from GSI and count unique result numbers
+     * /resorts/{resortID}/seasons/{seasonID}/day/{dayID}/skiers
+     * Get number of unique skiers at resort/season/day
      */
     public Integer getUniqueSkierNumbers(Integer resortID, Integer seasonID, Integer dayID) {
         Set<Integer> uniqueSkiers = new HashSet<>();
         String pk = String.valueOf(resortID);
         String skPrefix = seasonID + "#" + dayID;
-        logger.info(pk);
-        logger.info(skPrefix);
+        // logger.info(pk);
+        // logger.info(skPrefix);
 
         try {
             // Query the GSI
@@ -113,6 +94,129 @@ public class QueryDao {
 
     }
 
+    /**
+     * GET /skiers/{resortID}/seasons/{seasonID}/days/{dayID}/skiers/{skierID}
+     * Get the total vertical for the skier for the specified ski day
+     */
+    public Integer getDailyVertical(String seasonID, int dayID, int skierID) {
+        // get the list of the skier's lift ride vertical for the day, then sum vertical
+        String pk = String.valueOf(skierID);
+        String skPrefix = seasonID + "#" + dayID;
+        // logger.info(pk);
+        // logger.info(skPrefix);
+
+        try {
+            QueryRequest queryRequest = QueryRequest.builder()
+                    .tableName(DynamoDbConfig.SKIER_TABLE_NAME)
+                    .keyConditionExpression("#pk = :skierID AND begins_with(#sk, :skPrefix)")
+                    .expressionAttributeNames(
+                            Map.of(
+                                    "#pk", "skierID",
+                                    "#sk", "seasonID#dayID#time"
+                            )
+                    )
+                    .expressionAttributeValues(
+                            Map.of(
+                                    ":skierID", AttributeValue.builder().s(pk).build(),
+                                    ":skPrefix", AttributeValue.builder().s(skPrefix).build()
+                            )
+                    )
+                    .projectionExpression("vertical")
+                    .build();
+
+            QueryResponse queryResponse = ddb.query(queryRequest);
+            // Sum the vertical values
+            int totalVertical = queryResponse.items().stream()
+                    .mapToInt(item -> Integer.parseInt(item.get("vertical").n()))
+                    .sum();
+
+            return totalVertical;
+        } catch (Exception e) {
+            logger.severe("Error querying DynamoDB: " + e.getMessage());
+            e.printStackTrace();
+            return 0;
+        }
+    }
+
+    /**
+     * GET /skiers/{skierID}/verticaL
+     * Get the total vertical for the skier for specified seasons at the specified resort.
+     * If no season is specified, return all seasons.
+     */
+    public SkierVertical getResortVertical(String skierID, String resortID, String season) {
+        String pk = String.valueOf(skierID);
+        try {
+            QueryRequest queryRequest;
+            if (season == null) {
+                // Query all seasons
+                queryRequest = QueryRequest.builder()
+                        .tableName(DynamoDbConfig.SKIER_TABLE_NAME)
+                        .keyConditionExpression("#pk = :skierID")
+                        .filterExpression("resortID = :resortID")
+                        .expressionAttributeNames(
+                                Map.of(
+                                        "#pk", "skierID"
+                                )
+                        )
+                        .expressionAttributeValues(
+                                Map.of(
+                                        ":skierID", AttributeValue.builder().s(pk).build(),
+                                        ":resortID", AttributeValue.builder().s(resortID).build()
+                                )
+                        )
+                        .projectionExpression("vertical, seasonID")
+                        .build();
+                // logger.info("debug: first if, season: " + season + " resortID: " + resortID + " skier: " + skierID);
+            } else {
+                // Query specific season
+                String seasonPrefix = season + "#";
+
+                queryRequest = QueryRequest.builder()
+                        .tableName(DynamoDbConfig.SKIER_TABLE_NAME)
+                        .keyConditionExpression("#pk = :skierID AND begins_with(#sk, :seasonPrefix)")
+                        .filterExpression("resortID = :resortID")
+                        .expressionAttributeNames(
+                                Map.of(
+                                        "#pk", "skierID",
+                                        "#sk", "seasonID#dayID#time"
+                                )
+                        )
+                        .expressionAttributeValues(
+                                Map.of(
+                                        ":skierID", AttributeValue.builder().s(pk).build(),
+                                        ":seasonPrefix", AttributeValue.builder().s(seasonPrefix).build(),
+                                        ":resortID", AttributeValue.builder().s(resortID).build()
+                                )
+                        )
+                        .projectionExpression("vertical, seasonID")
+                        .build();
+            }
+
+            QueryResponse queryResponse = ddb.query(queryRequest);
+
+            // Aggregate results by seasonID
+            Map<String, Integer> seasonVerticalMap = queryResponse.items().stream()
+                    .collect(Collectors.groupingBy(
+                            item -> item.get("seasonID").s(),
+                            Collectors.summingInt(item -> Integer.parseInt(item.get("vertical").n()))
+                    ));
+            SkierVertical skierVertical = new SkierVertical();
+            for (Map.Entry<String, Integer> entry : seasonVerticalMap.entrySet()) {
+                skierVertical.addResortsItem(
+                        new SkierVerticalResorts()
+                                .seasonID(entry.getKey())
+                                .totalVert(entry.getValue())
+                );
+            }
+
+            return skierVertical;
+        } catch (Exception e) {
+            logger.warning("Error querying DynamoDB: " + e.getMessage());
+            e.printStackTrace();
+            throw e;
+        }
+    }
+
     public void testDynamoDbConnection() {
         try {
             // Test SkierTable
@@ -122,6 +226,13 @@ public class QueryDao {
         } catch (Exception e) {
             logger.severe("Error connecting to DynamoDB: " + e.getMessage());
             throw new RuntimeException("DynamoDB setup test failed", e);
+        }
+    }
+
+    public void shutdown() {
+        if (ddb != null) {
+            ddb.close();
+            logger.info("DynamoDbClient closed");
         }
     }
 }
