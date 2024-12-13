@@ -3,6 +3,8 @@ package org.sylvia;
 import com.google.gson.Gson;
 import io.swagger.client.model.ResponseMsg;
 import io.swagger.client.model.SkierVertical;
+import org.sylvia.config.RedisConfig;
+import redis.clients.jedis.JedisPool;
 
 import java.io.*;
 import java.time.Year;
@@ -19,12 +21,20 @@ public class SkierServlet extends HttpServlet {
     private QueryDao queryDao;
     private final Gson gson = new Gson();
     private final Logger logger = Logger.getLogger(SkierServlet.class.getName());
+    private JedisPool jedisPool;
 
     @Override
     public void init() throws ServletException {
         super.init();
         queryDao = QueryDao.getInstance();
         queryDao.testDynamoDbConnection();
+
+        try {
+            jedisPool = new JedisPool(RedisConfig.REDIS_URI, RedisConfig.PORT);
+            System.out.println("JedisPool initialized successfully.");
+        } catch (Exception e) {
+            throw new ServletException("Failed to initialize JedisPool", e);
+        }
     }
 
     /**
@@ -47,8 +57,8 @@ public class SkierServlet extends HttpServlet {
         if (validateUrlPath(pathParts)) {
             // GET /skiers/{resortID}/seasons/{seasonID}/days/{dayID}/skiers/{skierID}
             if ("seasons".equals(pathParts[2])) {
-                int totalVertical = getDailyVerticalFromDDB(pathParts);
-                // logger.info("debug: totoVertical" + String.valueOf(totalVertical));
+                int totalVertical = getDailyVertical(pathParts);
+                // logger.info("debug: totalVertical" + String.valueOf(totalVertical));
                 resp.setStatus(HttpServletResponse.SC_OK);
                 resp.getWriter().write(gson.toJson(totalVertical));
             } else if ("vertical".equals(pathParts[2])) {
@@ -62,7 +72,7 @@ public class SkierServlet extends HttpServlet {
                 int resortID = Integer.parseInt(req.getParameter("resortID"));
                 int skierID = Integer.parseInt(pathParts[1]);
                 String season = req.getParameter("season"); // optional
-                SkierVertical skierVertical = getResortVerticalFromDDB(skierID, resortID, season);
+                SkierVertical skierVertical = getResortVertical(skierID, resortID, season);
                 resp.setStatus(HttpServletResponse.SC_OK);
                 resp.getWriter().write(gson.toJson(skierVertical));
             }
@@ -74,7 +84,18 @@ public class SkierServlet extends HttpServlet {
     @Override
     public void destroy() {
         queryDao.shutdown();
-        logger.info("SkierServlet destroyed and QueryDao resources released");
+        logger.info("QueryDao resources released");
+
+        try {
+            if (jedisPool != null) {
+                jedisPool.close();
+                System.out.println("JedisPool closed successfully.");
+            }
+        } catch (Exception e) {
+            System.err.println("Error while closing JedisPool: " + e.getMessage());
+        } finally {
+            super.destroy();
+        }
     }
 
     /**
@@ -108,21 +129,56 @@ public class SkierServlet extends HttpServlet {
         return isValidated;
     }
 
-    private Integer getDailyVerticalFromDDB(String[] pathParts) {
+    /**
+     * Retrieves daily vertical from Redis cache or DynamoDB.
+     */
+    private Integer getDailyVertical(String[] pathParts) {
         String seasonID = pathParts[3];
         int dayID = Integer.parseInt(pathParts[5]);
         int skierID = Integer.parseInt(pathParts[7]);
+        String cacheKey = String.format("daily:%s:%s:%s", seasonID, dayID, skierID);
 
-        return queryDao.getDailyVertical(seasonID, dayID, skierID);
+        try (var jedis = jedisPool.getResource()) {
+            // Check cache
+            String cachedValue = jedis.get(cacheKey);
+            if (cachedValue != null) {
+                logger.info("Cache hit for key: " + cacheKey);
+                return Integer.parseInt(cachedValue);
+            }
+
+            // Cache miss, fetch from DynamoDB
+            logger.info("Cache miss for key: " + cacheKey);
+            Integer totalVertical = queryDao.getDailyVertical(seasonID, dayID, skierID);
+
+            // Store in cache
+            jedis.setex(cacheKey, 3600, String.valueOf(totalVertical)); // Cache for 1 hour
+            return totalVertical;
+        }
     }
 
     /**
      * GET /skiers/{skierID}/verticaL
      * get the total vertical for the skier for specified seasons at the specified resort
      */
-        private SkierVertical getResortVerticalFromDDB(Integer skierID, Integer resortID, String season) {
-        SkierVertical skierVertical = queryDao.getResortVertical(String.valueOf(skierID), String.valueOf(resortID), season);
-        return skierVertical;
+    private SkierVertical getResortVertical(Integer skierID, Integer resortID, String season) {
+        String cacheKey = String.format("vertical:%d:%d:%s", skierID, resortID, season == null ? "all" : season);
+
+        try (var jedis = jedisPool.getResource()) {
+            // Check cache
+            String cachedValue = jedis.get(cacheKey);
+            if (cachedValue != null) {
+                logger.info("Cache hit for key: " + cacheKey);
+                return gson.fromJson(cachedValue, SkierVertical.class);
+            }
+
+            // Cache miss, fetch from DynamoDB
+            logger.info("Cache miss for key: " + cacheKey);
+            SkierVertical skierVertical = queryDao.getResortVertical(String.valueOf(skierID), String.valueOf(resortID), season);
+
+            // Store in cache
+            jedis.setex(cacheKey, 3600, gson.toJson(skierVertical)); // Cache for 1 hour
+            return skierVertical;
+        }
     }
 
     private void writeErrorResponse(HttpServletResponse resp, int statusCode, String message) throws IOException {

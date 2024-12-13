@@ -3,6 +3,9 @@ package org.sylvia;
 import com.google.gson.Gson;
 import io.swagger.client.model.ResortSkiers;
 import io.swagger.client.model.ResponseMsg;
+import org.sylvia.config.RedisConfig;
+import redis.clients.jedis.Jedis;
+import redis.clients.jedis.JedisPool;
 
 import javax.servlet.ServletException;
 import javax.servlet.annotation.WebServlet;
@@ -20,12 +23,20 @@ public class ResortServlet extends HttpServlet {
     private final ResponseMsg responseMsg = new ResponseMsg();
     private final Logger logger = Logger.getLogger(ResortServlet.class.getName());
     private QueryDao queryDao;
+    private JedisPool jedisPool;
 
     @Override
     public void init() throws ServletException {
         super.init();
         queryDao = QueryDao.getInstance();
         queryDao.testDynamoDbConnection();
+
+        try {
+            jedisPool = new JedisPool(RedisConfig.REDIS_URI, RedisConfig.PORT);
+            System.out.println("JedisPool initialized successfully.");
+        } catch (Exception e) {
+            throw new ServletException("Failed to initialize JedisPool", e);
+        }
     }
 
     /**
@@ -47,9 +58,20 @@ public class ResortServlet extends HttpServlet {
             int seasonID = Integer.parseInt(pathParts[3]);
             int dayID = Integer.parseInt(pathParts[5]);
 
-            int uniqueSkiers = queryDao.getUniqueSkierNumbers(resortID, seasonID, dayID); // 404 data not found
-            resp.setStatus(HttpServletResponse.SC_OK);
-            resp.getWriter().write(gson.toJson(new ResortSkiers().time(String.valueOf(resortID)).numSkiers(uniqueSkiers)));
+            try {
+                String jsonResponse = getResortSkiersFromCacheOrDB(resortID, seasonID, dayID);
+                if (jsonResponse == null) {
+                    writeErrorResponse(resp, HttpServletResponse.SC_NOT_FOUND, "Data not found");
+                    return;
+                }
+
+                resp.setStatus(HttpServletResponse.SC_OK);
+                resp.getWriter().write(jsonResponse);
+            } catch (Exception e) {
+                logger.severe("Error processing request: " + e.getMessage());
+                e.printStackTrace();
+                writeErrorResponse(resp, HttpServletResponse.SC_INTERNAL_SERVER_ERROR, "Internal server error");
+            }
         } else {
             writeErrorResponse(resp, HttpServletResponse.SC_BAD_REQUEST, "Invalid path format");
         }
@@ -58,7 +80,18 @@ public class ResortServlet extends HttpServlet {
     @Override
     public void destroy() {
         queryDao.shutdown();
-        logger.info("ResortServlet destroyed and QueryDao resources released");
+        logger.info("QueryDao resources released");
+
+        try {
+            if (jedisPool != null) {
+                jedisPool.close();
+                System.out.println("JedisPool closed successfully.");
+            }
+        } catch (Exception e) {
+            System.err.println("Error while closing JedisPool: " + e.getMessage());
+        } finally {
+            super.destroy();
+        }
     }
 
     private Boolean validateUrlPath(String[] pathParts) {
@@ -78,9 +111,33 @@ public class ResortServlet extends HttpServlet {
         return true;
     }
 
+    private String getResortSkiersFromCacheOrDB(int resortID, int seasonID, int dayID) {
+        String cacheKey = String.format("resort:%d:season:%d:day:%d:skiers", resortID, seasonID, dayID);
+
+        try (Jedis jedis = jedisPool.getResource()) {
+            // Attempt to fetch from Redis
+            String cachedValue = jedis.get(cacheKey);
+            if (cachedValue != null) {
+                logger.info("Cache hit for key: " + cacheKey);
+                return cachedValue;
+            }
+
+            // Cache miss, query the database
+            logger.info("Cache miss for key: " + cacheKey);
+            int uniqueSkiers = queryDao.getUniqueSkierNumbers(resortID, seasonID, dayID);
+
+            // Prepare response and cache it
+            String jsonResponse = gson.toJson(new ResortSkiers()
+                    .time(String.valueOf(resortID))
+                    .numSkiers(uniqueSkiers));
+
+            jedis.setex(cacheKey, 3600, jsonResponse); // Cache the result for 1 hour
+            return jsonResponse;
+        }
+    }
+
     private void writeErrorResponse(HttpServletResponse resp, int statusCode, String message) throws IOException {
         resp.setStatus(statusCode);
         resp.getWriter().write(gson.toJson(responseMsg.message(message)));
     }
-
 }
