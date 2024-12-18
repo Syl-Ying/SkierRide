@@ -134,18 +134,13 @@ public class DynamoDB {
 
     public void testDynamoDbConnection() {
         try {
-            // Delete and recreate the table
-            deleteTable(ddb, DynamoDbConfig.SKIER_TABLE_NAME);
-            createTable(ddb, DynamoDbConfig.SKIER_TABLE_NAME);
+            // Delete and recreate the table for testing
+            // deleteTable(ddb, DynamoDbConfig.SKIER_TABLE_NAME);
+            // createTable(ddb, DynamoDbConfig.SKIER_TABLE_NAME);
 
             // Test SkierTable
             ddb.describeTable(request -> request.tableName(DynamoDbConfig.SKIER_TABLE_NAME));
             System.out.println("DynamoDB connection successful: " + DynamoDbConfig.SKIER_TABLE_NAME);
-
-            // Test ResortSeasonsTable
-            ddb.describeTable(request -> request.tableName(DynamoDbConfig.RESORT_TABLE_NAME));
-            System.out.println("DynamoDB connection successful: " + DynamoDbConfig.RESORT_TABLE_NAME);
-
         } catch (Exception e) {
             System.err.println("Error connecting to DynamoDB: " + e.getMessage());
             throw new RuntimeException("DynamoDB setup test failed", e);
