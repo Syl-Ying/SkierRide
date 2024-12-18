@@ -26,8 +26,9 @@ import io.github.resilience4j.ratelimiter.RateLimiter;
 import io.github.resilience4j.ratelimiter.RequestNotPermitted;
 import io.swagger.client.model.LiftRide;
 import io.swagger.client.model.ResponseMsg;
+import org.sylvia.config.ResilienceConfig;
 
-import static org.sylvia.RabbitMQConfig.*;
+import static org.sylvia.config.RabbitMQConfig.*;
 
 
 @WebServlet(name = "SkierServlet", value = "/skiers/*")
@@ -92,6 +93,28 @@ public class SkierServlet extends HttpServlet {
         }
     }
 
+    @Override
+    public void destroy() {
+        super.destroy();
+        logger.info("Destroying servlet and releasing resources...");
+        if (channelPool != null) {
+            for (Channel channel : channelPool) {
+                try {
+                    channel.close();
+                    logger.info("Channel closed successfully.");
+                } catch (IOException | TimeoutException e) {
+                    logger.severe("Error closing RabbitMQ channel: " + e.getMessage());
+                }
+            }
+            channelPool.clear();
+        }
+        logger.info("All channels closed and channel pool cleared.");
+    }
+
+    /**
+     * @param urlPath Eg. "/1/seasons/2019/day/1/skier/123"
+     *      pathParts = [, 1, seasons, 2019, day, 1, skier, 123]
+     */
     private Boolean isUrlPathValid(String urlPath, HttpServletResponse resp) throws IOException {
         // check if the url exists
         if (urlPath == null || urlPath.isEmpty()) {
@@ -102,9 +125,6 @@ public class SkierServlet extends HttpServlet {
 
         String[] pathParts = urlPath.split("/");
 
-        // validate the request url path according to the API spec
-        // urlPath  = "/1/seasons/2019/day/1/skier/123"
-        // pathParts = [, 1, seasons, 2019, day, 1, skier, 123]
         if (pathParts.length != 8) {
             resp.setStatus(HttpServletResponse.SC_BAD_REQUEST); // 400
             writeResponse(resp, "Invalid path, expected format: /{resortID}/seasons/{seasonID}/days/{dayID}/skiers/{skierID}");

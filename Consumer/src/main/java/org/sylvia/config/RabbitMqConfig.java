@@ -7,7 +7,4 @@ public class RabbitMqConfig {
     public static String RABBITMQ_NAME = "skierQueue";
     public static String RABBITMQ_USERNAME = "guest";
     public static String RABBITMQ_PASSWORD = "guest";
-
-
-
 }

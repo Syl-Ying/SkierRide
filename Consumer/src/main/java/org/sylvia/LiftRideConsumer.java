@@ -19,6 +19,8 @@ public class LiftRideConsumer {
     private static final Logger logger = Logger.getLogger(LiftRideConsumer.class.getName());
     private static final Integer NUM_WORKERS = 30;
     private static final DynamoDB dynamoDB = new DynamoDB();
+    private static ExecutorService pool;
+    private static Connection connection;
 
     public static void main(String[] args) throws IOException, TimeoutException {
         Gson gson = new Gson();
@@ -29,13 +31,49 @@ public class LiftRideConsumer {
         factory.setPort(RabbitMqConfig.RABBITMQ_PORT);
         factory.setUsername(RabbitMqConfig.RABBITMQ_USERNAME);
         factory.setPassword(RabbitMqConfig.RABBITMQ_PASSWORD);
-        Connection connection = factory.newConnection();
+        connection = factory.newConnection();
+        logger.info("RabbitMQ connection established.");
 
         dynamoDB.testDynamoDbConnection();
 
-        ExecutorService pool = Executors.newFixedThreadPool(NUM_WORKERS);
+        pool = Executors.newFixedThreadPool(NUM_WORKERS);
         for (int i =0; i < NUM_WORKERS; i++) {
             pool.execute(new WorkerRunnable(connection, gson, logger, skierLiftRidesMap, dynamoDB));
         }
+
+        Runtime.getRuntime().addShutdownHook(new Thread(() -> {
+            logger.info("Shutdown initiated...");
+            shutdownResources();
+        }));
+    }
+
+    private static void shutdownResources() {
+        // Close RabbitMQ connection
+        if (connection != null && connection.isOpen()) {
+            try {
+                logger.info("Closing RabbitMQ connection...");
+                connection.close();
+            } catch (IOException e) {
+                logger.severe("Error closing RabbitMQ connection: " + e.getMessage());
+            }
+        }
+
+        dynamoDB.shutdown();
+
+        // Shutdown thread pool
+        if (pool != null) {
+            logger.info("Shutting down thread pool...");
+            pool.shutdown();
+            try {
+                if (!pool.awaitTermination(60, java.util.concurrent.TimeUnit.SECONDS)) {
+                    logger.warning("Forcing shutdown of thread pool...");
+                    pool.shutdownNow();
+                }
+            } catch (InterruptedException e) {
+                logger.warning("Thread pool shutdown interrupted: " + e.getMessage());
+                pool.shutdownNow();
+            }
+        }
+        logger.info("All resources shut down successfully.");
     }
 }

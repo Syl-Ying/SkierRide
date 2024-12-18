@@ -27,7 +27,7 @@ public class LiftRideProducer implements Runnable {
                     1, // constant resortID
                     //random.nextInt(10) + 1, // resortID [1, 10]
                     "2024", // seasonID 2024
-                    "1", // dayID 1
+                    "3", // dayID 1, 2, 3
                     new LiftRide().liftID(random.nextInt(40) + 1).time(random.nextInt(360) + 1) // liftID [1, 40], time [1, 360]
             );
 
